@@ -144,6 +144,11 @@ const createWindow = async () => {
   ipcMain.handle('close-window', () => {
     mainWindow?.close();
   });
+
+  // Add the new IPC handler for send message
+  ipcMain.handle('send-message', () => {
+    store.getState().SEND_MESSAGE();
+  });
 };
 
 /**

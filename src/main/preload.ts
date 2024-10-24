@@ -30,6 +30,7 @@ const electronHandler = {
     minimize: () => ipcRenderer.invoke('minimize-window'),
     maximize: () => ipcRenderer.invoke('maximize-window'),
     close: () => ipcRenderer.invoke('close-window'),
+    send: () => ipcRenderer.invoke('send-message'),  // Add this new handler
   },
 };
 

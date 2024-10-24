@@ -27,4 +27,5 @@ export type AppState = {
   SET_INSTRUCTIONS: (instructions: string) => void;
   SET_FULLY_AUTO: (fullyAuto: boolean) => void;
   CLEAR_HISTORY: () => void;
+  SEND_MESSAGE: () => void;
 };

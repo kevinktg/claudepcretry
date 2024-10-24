@@ -37,8 +37,16 @@ function Main() {
   const startRun = () => {
     // Update Zustand state before starting the run
     dispatch({ type: 'SET_INSTRUCTIONS', payload: localInstructions });
+    dispatch({ type: 'CLEAR_HISTORY' }); // Clear history first
     dispatch({ type: 'RUN_AGENT', payload: null });
   };
+
+  // Add this effect to sync local instructions with saved instructions
+  React.useEffect(() => {
+    if (savedInstructions !== localInstructions) {
+      dispatch({ type: 'SET_INSTRUCTIONS', payload: localInstructions });
+    }
+  }, [localInstructions, savedInstructions, dispatch]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.metaKey && !e.shiftKey) {
@@ -187,6 +195,27 @@ function Main() {
                 <FaTrash />
               </Button>
             )}
+            {/* Add Send button */}
+            <Button
+              bg="transparent"
+              fontWeight="normal"
+              _hover={{
+                bg: 'whiteAlpha.500',
+                borderColor: 'blackAlpha.300',
+                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.05)',
+              }}
+              _focus={{
+                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.05)',
+                outline: 'none',
+              }}
+              borderRadius="12px"
+              border="1px solid"
+              borderColor="blackAlpha.200"
+              onClick={() => dispatch('SEND_MESSAGE')}
+              isDisabled={!running && localInstructions?.trim() === ''}
+            >
+              Send
+            </Button>
             <Button
               bg="transparent"
               fontWeight="normal"
@@ -205,7 +234,7 @@ function Main() {
               onClick={running ? () => dispatch('STOP_RUN') : startRun}
               isDisabled={!running && localInstructions?.trim() === ''}
             >
-              {running ? <FaStop /> : "Let's Go"}
+              {running ? <FaStop /> : "New"}  {/* Changed from "Let's Go" to "New" */}
             </Button>
           </HStack>
         </HStack>

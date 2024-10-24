@@ -61,18 +61,22 @@ const getScreenshot = async () => {
 const mapToAiSpace = (x: number, y: number) => {
   const { width, height } = getScreenDimensions();
   const aiDimensions = getAiScaledScreenDimensions();
+  const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
+  
   return {
-    x: (x * aiDimensions.width) / width,
-    y: (y * aiDimensions.height) / height,
+    x: (x * aiDimensions.width * scaleFactor) / width,
+    y: (y * aiDimensions.height * scaleFactor) / height,
   };
 };
 
 const mapFromAiSpace = (x: number, y: number) => {
   const { width, height } = getScreenDimensions();
   const aiDimensions = getAiScaledScreenDimensions();
+  const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
+  
   return {
-    x: (x * width) / aiDimensions.width,
-    y: (y * height) / aiDimensions.height,
+    x: (x * width) / (aiDimensions.width * scaleFactor),
+    y: (y * height) / (aiDimensions.height * scaleFactor),
   };
 };
 
@@ -86,10 +90,10 @@ const promptForAction = async (
       return {
         ...msg,
         content: msg.content.map((item) => {
-          if (item.type === 'tool_result' && typeof item.content !== 'string') {
+          if (item.type === 'tool_result' && Array.isArray(item.content)) {
             return {
               ...item,
-              content: item.content?.filter((c) => c.type !== 'image'),
+              content: item.content.filter((c) => c.type !== 'image'),
             };
           }
           return item;
@@ -140,6 +144,12 @@ const promptForAction = async (
 };
 
 export const performAction = async (action: NextAction) => {
+  if (action.type === 'mouse_move') {
+    const aiCoords = { x: action.x, y: action.y };
+    const screenCoords = mapFromAiSpace(action.x, action.y);
+    console.log('AI Coordinates:', aiCoords);
+    console.log('Screen Coordinates:', screenCoords);
+  }
   switch (action.type) {
     case 'mouse_move':
       const { x, y } = mapFromAiSpace(action.x, action.y);
@@ -199,10 +209,10 @@ export const runAgent = async (
   setState: (state: AppState) => void,
   getState: () => AppState,
 ) => {
+  // Only set running and error, don't reset history
   setState({
     ...getState(),
     running: true,
-    runHistory: [{ role: 'user', content: getState().instructions ?? '' }],
     error: null,
   });
 
