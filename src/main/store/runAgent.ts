@@ -187,7 +187,14 @@ export const performAction = async (action: NextAction) => {
     case 'key':
       const keyMap = {
         Return: Key.Enter,
+        Tab: Key.Tab,
+        Enter: Key.Enter,
+        ArrowUp: Key.Up,
+        ArrowDown: Key.Down,
+        ArrowLeft: Key.Left,
+        ArrowRight: Key.Right,
       };
+
       const keys = action.text.split('+').map((key) => {
         const mappedKey = keyMap[key as keyof typeof keyMap];
         if (!mappedKey) {
@@ -195,7 +202,16 @@ export const performAction = async (action: NextAction) => {
         }
         return mappedKey;
       });
-      await keyboard.pressKey(...keys);
+
+      // Press and release the key properly
+      try {
+        await keyboard.pressKey(...keys);
+        await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+        await keyboard.releaseKey(...keys);
+      } catch (error) {
+        console.error('Error pressing key:', error);
+        throw error;
+      }
       break;
     case 'screenshot':
       // Don't do anything since we always take a screenshot after each step
@@ -258,7 +274,7 @@ export const runAgent = async (
       }
       performAction(action);
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       if (!getState().running) {
         break;
       }
