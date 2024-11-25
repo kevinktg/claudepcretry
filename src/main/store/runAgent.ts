@@ -3,17 +3,17 @@ import {
   BetaMessageParam,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { Button, Key, keyboard, mouse, Point } from '@nut-tree-fork/nut-js';
-// import { createCanvas, loadImage } from 'canvas';
 import { desktopCapturer, screen } from 'electron';
 import { anthropic } from './anthropic';
 import { AppState, NextAction } from './types';
 import { extractAction } from './extractAction';
 
 const MAX_STEPS = 50;
+const MAX_RETRIES = 3;
 
 function getScreenDimensions(): { width: number; height: number } {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  return primaryDisplay.size;
+  const { size } = screen.getPrimaryDisplay();
+  return size;
 }
 
 function getAiScaledScreenDimensions(): { width: number; height: number } {
@@ -24,11 +24,9 @@ function getAiScaledScreenDimensions(): { width: number; height: number } {
   let scaledHeight: number;
 
   if (aspectRatio > 1280 / 800) {
-    // Width is the limiting factor
     scaledWidth = 1280;
     scaledHeight = Math.round(1280 / aspectRatio);
   } else {
-    // Height is the limiting factor
     scaledHeight = 800;
     scaledWidth = Math.round(800 * aspectRatio);
   }
@@ -37,21 +35,18 @@ function getAiScaledScreenDimensions(): { width: number; height: number } {
 }
 
 const getScreenshot = async () => {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.size;
+  const { size: { width, height } } = screen.getPrimaryDisplay();
   const aiDimensions = getAiScaledScreenDimensions();
 
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width, height },
   });
-  const primarySource = sources[0]; // Assuming the first source is the primary display
+  const primarySource = sources[0];
 
   if (primarySource) {
     const screenshot = primarySource.thumbnail;
-    // Resize the screenshot to AI dimensions
     const resizedScreenshot = screenshot.resize(aiDimensions);
-    // Convert the resized screenshot to a base64-encoded PNG
     const base64Image = resizedScreenshot.toPNG().toString('base64');
     return base64Image;
   }
@@ -61,8 +56,8 @@ const getScreenshot = async () => {
 const mapToAiSpace = (x: number, y: number) => {
   const { width, height } = getScreenDimensions();
   const aiDimensions = getAiScaledScreenDimensions();
-  const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
-  
+  const { scaleFactor } = screen.getPrimaryDisplay();
+
   return {
     x: (x * aiDimensions.width * scaleFactor) / width,
     y: (y * aiDimensions.height * scaleFactor) / height,
@@ -72,8 +67,8 @@ const mapToAiSpace = (x: number, y: number) => {
 const mapFromAiSpace = (x: number, y: number) => {
   const { width, height } = getScreenDimensions();
   const aiDimensions = getAiScaledScreenDimensions();
-  const scaleFactor = screen.getPrimaryDisplay().scaleFactor;
-  
+  const { scaleFactor } = screen.getPrimaryDisplay();
+
   return {
     x: (x * width) / (aiDimensions.width * scaleFactor),
     y: (y * height) / (aiDimensions.height * scaleFactor),
@@ -83,9 +78,8 @@ const mapFromAiSpace = (x: number, y: number) => {
 const promptForAction = async (
   runHistory: BetaMessageParam[],
 ): Promise<BetaMessageParam> => {
-  // Strip images from all but the last message
   const historyWithoutImages = runHistory.map((msg, index) => {
-    if (index === runHistory.length - 1) return msg; // Keep the last message intact
+    if (index === runHistory.length - 1) return msg;
     if (Array.isArray(msg.content)) {
       return {
         ...msg,
@@ -134,8 +128,7 @@ const promptForAction = async (
         },
       },
     ],
-    system: `The user will ask you to perform a task and you should use their computer to do so. After each step, take a screenshot and carefully evaluate if you have achieved the right outcome. Explicitly show your thinking: "I have evaluated step X..." If not correct, try again. Only when you confirm a step was executed correctly should you move on to the next one. Note that you have to click into the browser address bar before typing a URL. You should always call a tool! Always return a tool call. Remember call the finish_run tool when you have achieved the goal of the task. Do not explain you have finished the task, just call the tool. Use keyboard shortcuts to navigate whenever possible.`,
-    // tool_choice: { type: 'any' },
+    system: `The user will ask you to perform a task and you should use their computer to do so. After each step, take a screenshot and carefully evaluate if you have achieved the right outcome. Explicitly show your thinking: "I have evaluated step X..." If not correct, try again with a different approach. Only when you confirm a step was executed correctly should you move on to the next one. Note that you have to click into the browser address bar before typing a URL. You should always call a tool! Always return a tool call. Remember call the finish_run tool when you have achieved the goal of the task. Do not explain you have finished the task, just call the tool. Use keyboard shortcuts to navigate whenever possible.`,
     messages: historyWithoutImages,
     betas: ['computer-use-2024-10-22'],
   });
@@ -143,89 +136,143 @@ const promptForAction = async (
   return { content: message.content, role: message.role };
 };
 
-export const performAction = async (action: NextAction) => {
+const tryAlternativeMethod = async (action: NextAction): Promise<void> => {
+  switch (action.type) {
+    case 'type':
+      if (action.text) {
+        for (const char of action.text) {
+          await keyboard.type(char);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 50);
+          });
+        }
+      }
+      break;
+    case 'left_click':
+      await mouse.doubleClick(Button.LEFT);
+      break;
+    case 'mouse_move':
+      if ('x' in action && 'y' in action) {
+        const currentPos = await mouse.getPosition();
+        const steps = 5;
+        for (let i = 0; i < steps; i += 1) {
+          const stepX = currentPos.x + ((action.x - currentPos.x) * i) / steps;
+          const stepY = currentPos.y + ((action.y - currentPos.y) * i) / steps;
+          await mouse.setPosition(new Point(stepX, stepY));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+        }
+      }
+      break;
+    default:
+      throw new Error(`No alternative method available for ${action.type}`);
+  }
+};
+
+export const performAction = async (
+  action: NextAction,
+  retryCount = 0,
+): Promise<void> => {
   if (action.type === 'mouse_move') {
     const aiCoords = { x: action.x, y: action.y };
     const screenCoords = mapFromAiSpace(action.x, action.y);
     console.log('AI Coordinates:', aiCoords);
     console.log('Screen Coordinates:', screenCoords);
   }
-  switch (action.type) {
-    case 'mouse_move':
-      const { x, y } = mapFromAiSpace(action.x, action.y);
-      await mouse.setPosition(new Point(x, y));
-      break;
-    case 'left_click_drag':
-      const { x: dragX, y: dragY } = mapFromAiSpace(action.x, action.y);
-      const currentPosition = await mouse.getPosition();
-      await mouse.drag([currentPosition, new Point(dragX, dragY)]);
-      break;
-    case 'cursor_position':
-      const position = await mouse.getPosition();
-      const aiPosition = mapToAiSpace(position.x, position.y);
-      // TODO: actually return the position
-      break;
-    case 'left_click':
-      await mouse.leftClick();
-      break;
-    case 'right_click':
-      await mouse.rightClick();
-      break;
-    case 'middle_click':
-      await mouse.click(Button.MIDDLE);
-      break;
-    case 'double_click':
-      await mouse.doubleClick(Button.LEFT);
-      break;
-    case 'type':
-      // Set typing delay to 0ms for instant typing
-      keyboard.config.autoDelayMs = 0;
-      await keyboard.type(action.text);
-      // Reset delay back to default if needed
-      keyboard.config.autoDelayMs = 500;
-      break;
-    case 'key':
-      const keyMap = {
-        Return: Key.Enter,
-        Tab: Key.Tab,
-        Enter: Key.Enter,
-        ArrowUp: Key.Up,
-        ArrowDown: Key.Down,
-        ArrowLeft: Key.Left,
-        ArrowRight: Key.Right,
-      };
 
-      const keys = action.text.split('+').map((key) => {
-        const mappedKey = keyMap[key as keyof typeof keyMap];
-        if (!mappedKey) {
-          throw new Error(`Tried to press unknown key: ${key}`);
-        }
-        return mappedKey;
-      });
-
-      // Press and release the key properly
-      try {
-        await keyboard.pressKey(...keys);
-        await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-        await keyboard.releaseKey(...keys);
-      } catch (error) {
-        console.error('Error pressing key:', error);
-        throw error;
+  try {
+    switch (action.type) {
+      case 'mouse_move': {
+        const { x, y } = mapFromAiSpace(action.x, action.y);
+        await mouse.setPosition(new Point(x, y));
+        break;
       }
-      break;
-    case 'screenshot':
-      // Don't do anything since we always take a screenshot after each step
-      break;
-    default:
-      throw new Error(`Unsupported action: ${action.type}`);
+      case 'left_click_drag': {
+        const { x: dragX, y: dragY } = mapFromAiSpace(action.x, action.y);
+        const currentPosition = await mouse.getPosition();
+        await mouse.drag([currentPosition, new Point(dragX, dragY)]);
+        break;
+      }
+      case 'cursor_position': {
+        const position = await mouse.getPosition();
+        mapToAiSpace(position.x, position.y);
+        break;
+      }
+      case 'left_click':
+        await mouse.leftClick();
+        break;
+      case 'right_click':
+        await mouse.rightClick();
+        break;
+      case 'middle_click':
+        await mouse.click(Button.MIDDLE);
+        break;
+      case 'double_click':
+        await mouse.doubleClick(Button.LEFT);
+        break;
+      case 'type':
+        keyboard.config.autoDelayMs = 0;
+        await keyboard.type(action.text);
+        keyboard.config.autoDelayMs = 500;
+        break;
+      case 'key': {
+        const keyMap = {
+          Return: Key.Enter,
+          Tab: Key.Tab,
+          Enter: Key.Enter,
+          ArrowUp: Key.Up,
+          ArrowDown: Key.Down,
+          ArrowLeft: Key.Left,
+          ArrowRight: Key.Right,
+        };
+
+        const keys = action.text.split('+').map((key) => {
+          const mappedKey = keyMap[key as keyof typeof keyMap];
+          if (!mappedKey) {
+            throw new Error(`Tried to press unknown key: ${key}`);
+          }
+          return mappedKey;
+        });
+
+        try {
+          await keyboard.pressKey(...keys);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+          await keyboard.releaseKey(...keys);
+        } catch (error) {
+          console.error('Error pressing key:', error);
+          throw error;
+        }
+        break;
+      }
+      case 'screenshot':
+        break;
+      default:
+        throw new Error(`Unsupported action: ${action.type}`);
+    }
+  } catch (error) {
+    if (retryCount < MAX_RETRIES) {
+      console.log(
+        `Action failed, trying alternative method (attempt ${retryCount + 1}/${MAX_RETRIES})`,
+      );
+      try {
+        await tryAlternativeMethod(action);
+      } catch (alternativeError) {
+        return performAction(action, retryCount + 1);
+      }
+    } else {
+      throw new Error(`Action failed after ${MAX_RETRIES} attempts: ${error}`);
+    }
   }
+  return undefined;
 };
 
 export const runAgent = async (
   setState: (state: AppState) => void,
   getState: () => AppState,
 ) => {
-  // Only set running and error, don't reset history
   setState({
     ...getState(),
     running: true,
@@ -233,7 +280,6 @@ export const runAgent = async (
   });
 
   while (getState().running) {
-    // Add this check at the start of the loop
     if (getState().runHistory.length >= MAX_STEPS * 2) {
       setState({
         ...getState(),
@@ -272,9 +318,40 @@ export const runAgent = async (
       if (!getState().running) {
         break;
       }
-      performAction(action);
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        await performAction(action);
+      } catch (actionError) {
+        console.error('Action failed with all retries:', actionError);
+        setState({
+          ...getState(),
+          runHistory: [
+            ...getState().runHistory,
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: toolId,
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Action failed: ${actionError}. Please try a different approach.`,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        });
+        // Let AI try a different approach in next iteration
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1000);
+      });
       if (!getState().running) {
         break;
       }
